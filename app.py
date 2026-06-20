@@ -24,29 +24,126 @@ REPLICATE_TOKEN = os.getenv("REPLICATE_TOKEN")
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
 FEED_URL = os.getenv("FEED_URL", "https://tarjomaan.com/feed")
+SITE_BASE_URL = os.getenv("SITE_BASE_URL", "https://tarjomaan.com")
+
+# چندتا پست در هر اجرا؟
+DAILY_POST_COUNT = int(os.getenv("DAILY_POST_COUNT", "5"))
+
+# فاصله بین پست‌ها (دقیقه) - برای طبیعی به نظر رسیدن
+DELAY_BETWEEN_POSTS_MIN = int(os.getenv("DELAY_BETWEEN_POSTS_MIN", "30"))
+
+# مسیر ذخیره تاریخچه پست‌ها (باید روی Volume دائمی باشه)
+DATA_DIR = os.getenv("DATA_DIR", "/data")
+POSTED_TRACKER_FILE = os.path.join(DATA_DIR, "posted_articles.json")
+
+# چند صفحه از آرشیو سایت بخونیم (هر صفحه ~20 مقاله)
+MAX_ARCHIVE_PAGES = int(os.getenv("MAX_ARCHIVE_PAGES", "15"))
 
 # ==================== تابع‌ها ====================
 
-def get_latest_article():
-    """آخرین مقاله از RSS فید"""
+def load_posted_articles():
+    """لیست مقالاتی که قبلاً پست شدن رو بخون"""
     try:
-        logger.info("📡 دریافت مقالات...")
-        feed = feedparser.parse(FEED_URL)
-        
-        if not feed.entries:
-            logger.warning("❌ مقاله‌ای پیدا نشد")
-            return None
-        
-        article = feed.entries[0]
-        return {
-            "title": article.title,
-            "link": article.link,
-            "summary": article.get("summary", ""),
-            "published": article.get("published", "")
-        }
+        os.makedirs(DATA_DIR, exist_ok=True)
+        if os.path.exists(POSTED_TRACKER_FILE):
+            with open(POSTED_TRACKER_FILE, 'r', encoding='utf-8') as f:
+                return set(json.load(f))
+        return set()
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت مقالات: {e}")
-        return None
+        logger.warning(f"⚠️ خطا در خواندن تاریخچه: {e}")
+        return set()
+
+
+def save_posted_article(link):
+    """یک مقاله رو به لیست پست‌شده‌ها اضافه کن"""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        posted = load_posted_articles()
+        posted.add(link)
+        with open(POSTED_TRACKER_FILE, 'w', encoding='utf-8') as f:
+            json.dump(list(posted), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"⚠️ خطا در ذخیره تاریخچه: {e}")
+
+
+def get_all_articles_from_archive():
+    """
+    همه مقالات سایت (قدیمی + جدید) رو از WordPress REST API بگیر.
+    برخلاف RSS که فقط چندتای آخر رو میده، این کل آرشیو رو میده.
+    """
+    logger.info("📚 دریافت آرشیو کامل مقالات...")
+    all_articles = []
+    api_url = f"{SITE_BASE_URL}/wp-json/wp/v2/posts"
+    
+    try:
+        for page in range(1, MAX_ARCHIVE_PAGES + 1):
+            response = requests.get(
+                api_url,
+                params={"page": page, "per_page": 20, "_fields": "title,link,date,excerpt"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15
+            )
+            
+            if response.status_code != 200:
+                break
+            
+            posts = response.json()
+            if not posts:
+                break
+            
+            for post in posts:
+                title = post.get("title", {}).get("rendered", "")
+                link = post.get("link", "")
+                excerpt = post.get("excerpt", {}).get("rendered", "")
+                date = post.get("date", "")
+                
+                if title and link:
+                    all_articles.append({
+                        "title": re.sub('<[^<]+?>', '', title).strip(),
+                        "link": link,
+                        "summary": re.sub('<[^<]+?>', '', excerpt).strip(),
+                        "published": date
+                    })
+        
+        logger.info(f"✅ {len(all_articles)} مقاله در آرشیو پیدا شد")
+        return all_articles
+        
+    except Exception as e:
+        logger.error(f"❌ خطا در دریافت آرشیو: {e}")
+        return []
+
+
+def get_articles_to_post():
+    """
+    مقالاتی که هنوز پست نشدن رو انتخاب کن.
+    از قدیمی‌ترین شروع میکنه تا backlog پاک بشه، بعد میرسه به جدیدترین‌ها.
+    """
+    all_articles = get_all_articles_from_archive()
+    
+    if not all_articles:
+        logger.warning("⚠️ آرشیو در دسترس نبود - استفاده از RSS")
+        feed = feedparser.parse(FEED_URL)
+        all_articles = [{
+            "title": e.title,
+            "link": e.link,
+            "summary": e.get("summary", ""),
+            "published": e.get("published", "")
+        } for e in feed.entries]
+    
+    posted = load_posted_articles()
+    unposted = [a for a in all_articles if a["link"] not in posted]
+    
+    if not unposted:
+        logger.info("✅ همه مقالات پست شدن! منتظر مقاله جدید...")
+        return []
+    
+    # قدیمی‌ترین‌ها اول (برای پاک‌کردن backlog)
+    unposted.sort(key=lambda a: a.get("published", ""))
+    
+    selected = unposted[:DAILY_POST_COUNT]
+    logger.info(f"📋 {len(selected)} مقاله برای پست امروز انتخاب شد (از {len(unposted)} باقیمانده)")
+    
+    return selected
 
 
 def get_article_full_text(url):
@@ -98,7 +195,7 @@ def translate_and_summarize_with_groq(title, content):
         }
         
         payload = {
-            "model": "mixtral-8x7b-32768",
+            "model": "openai/gpt-oss-120b",
             "messages": [
                 {"role": "user", "content": prompt}
             ],
@@ -275,61 +372,80 @@ def save_result(article_title, summary, image_url):
 
 # ==================== Main ====================
 
-def main():
-    logger.info("=" * 60)
-    logger.info("🚀 شروع سیستم اتوماتیک Tarjomaan")
-    logger.info("=" * 60)
+def process_single_article(article, index, total):
+    """یک مقاله رو کامل پردازش کن: متن → خلاصه → عکس → پست"""
+    logger.info("\n" + "━" * 60)
+    logger.info(f"📰 مقاله {index}/{total}: {article['title']}")
+    logger.info("━" * 60)
     
-    # بررسی API Keys
-    if not GROQ_API_KEY or not REPLICATE_TOKEN:
-        logger.error("❌ API Keys تنظیم نشده‌اند!")
-        return
-    
-    # مرحله ۱: دریافت مقاله
-    article = get_latest_article()
-    if not article:
-        logger.warning("❌ مقاله‌ای پیدا نشد")
-        return
-    
-    logger.info(f"📰 عنوان: {article['title']}\n")
-    
-    # مرحله ۲: دریافت متن کامل
+    # متن کامل
     full_text = get_article_full_text(article['link'])
     if not full_text:
         full_text = article['summary']
     
-    # مرحله ۳: خلاصه‌سازی
+    # خلاصه‌سازی
     summary = translate_and_summarize_with_groq(article['title'], full_text)
-    
     if not summary:
-        logger.error("❌ خلاصه‌سازی ناموفق")
-        return
+        logger.error(f"❌ خلاصه‌سازی ناموفق برای: {article['title']}")
+        return False
     
-    # مرحله ۴: ساخت تصویر
+    # ساخت تصویر
     image_url = generate_image_with_flux(article['title'])
-    
     if not image_url:
-        logger.error("❌ ساخت تصویر ناموفق")
-        return
+        logger.error(f"❌ ساخت تصویر ناموفق برای: {article['title']}")
+        return False
     
-    # مرحله ۵: نتیجه
-    logger.info("\n" + "=" * 60)
-    logger.info("✅ تمام شد!")
-    logger.info("=" * 60)
     logger.info(f"\n📸 عکس:\n{image_url}")
-    logger.info(f"\n📝 متن پست:\n{summary}")
-    logger.info("=" * 60)
+    logger.info(f"\n📝 متن پست:\n{summary}\n")
     
-    # مرحله ۶: ذخیره و پست
     save_result(article['title'], summary, image_url)
     
-    # سعی برای پست در اینستاگرام
+    # پست در اینستاگرام
+    posted = False
     if INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD:
-        post_to_instagram(image_url, summary)
+        posted = post_to_instagram(image_url, summary)
     else:
         logger.warning("⚠️ اطلاعات اینستاگرام تنظیم نشده")
     
-    logger.info("\n✅ پایان اجرا")
+    # این مقاله رو به‌عنوان "پست‌شده" ثبت کن - حتی اگر پست در اینستاگرام
+    # ناموفق بود ولی خلاصه/عکس ساخته شد (برای جلوگیری از تکرار بی‌نهایت)
+    save_posted_article(article['link'])
+    
+    return posted
+
+
+def main():
+    logger.info("=" * 60)
+    logger.info("🚀 شروع سیستم اتوماتیک Tarjomaan")
+    logger.info(f"🎯 هدف: {DAILY_POST_COUNT} پست در این اجرا")
+    logger.info("=" * 60)
+    
+    if not GROQ_API_KEY or not REPLICATE_TOKEN:
+        logger.error("❌ API Keys تنظیم نشده‌اند!")
+        return
+    
+    articles = get_articles_to_post()
+    
+    if not articles:
+        logger.info("ℹ️ مقاله جدیدی برای پست وجود نداره")
+        return
+    
+    success_count = 0
+    
+    for i, article in enumerate(articles, start=1):
+        success = process_single_article(article, i, len(articles))
+        if success:
+            success_count += 1
+        
+        # فاصله بین پست‌ها - بجز آخرین مورد
+        if i < len(articles):
+            wait_seconds = DELAY_BETWEEN_POSTS_MIN * 60
+            logger.info(f"⏳ صبر {DELAY_BETWEEN_POSTS_MIN} دقیقه تا پست بعدی...")
+            time.sleep(wait_seconds)
+    
+    logger.info("\n" + "=" * 60)
+    logger.info(f"✅ پایان اجرا: {success_count}/{len(articles)} پست موفق")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
