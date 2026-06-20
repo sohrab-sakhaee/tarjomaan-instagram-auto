@@ -77,18 +77,32 @@ def get_all_articles_from_archive():
     
     try:
         for page in range(1, MAX_ARCHIVE_PAGES + 1):
-            response = requests.get(
-                api_url,
-                params={"page": page, "per_page": 20, "_fields": "title,link,date,excerpt"},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=15
-            )
+            logger.info(f"  📄 دریافت صفحه {page}/{MAX_ARCHIVE_PAGES}...")
+            
+            try:
+                response = requests.get(
+                    api_url,
+                    params={"page": page, "per_page": 20, "_fields": "title,link,date,excerpt"},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=(10, 20)  # (connect timeout, read timeout)
+                )
+            except requests.exceptions.Timeout:
+                logger.warning(f"  ⏱️ صفحه {page}: timeout - رد شدن")
+                break
+            except requests.exceptions.ConnectionError as ce:
+                logger.warning(f"  🔌 صفحه {page}: خطای اتصال - {ce}")
+                break
+            
+            logger.info(f"  ↳ status: {response.status_code}")
             
             if response.status_code != 200:
+                logger.warning(f"  ⚠️ صفحه {page} status {response.status_code} - متوقف شد")
+                logger.warning(f"  ⚠️ پاسخ: {response.text[:200]}")
                 break
             
             posts = response.json()
             if not posts:
+                logger.info(f"  ✅ صفحه {page} خالی بود - آرشیو تمام شد")
                 break
             
             for post in posts:
