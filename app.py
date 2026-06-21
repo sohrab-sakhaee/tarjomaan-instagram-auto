@@ -436,6 +436,20 @@ def main():
     logger.info(f"🎯 هدف: {DAILY_POST_COUNT} پست در این اجرا")
     logger.info("=" * 60)
     
+    # دیباگ: ببینیم دقیقاً چه متغیرهایی به کانتینر رسیدن (بدون نشون‌دادن مقدار واقعی)
+    logger.info("🔍 بررسی متغیرهای محیطی:")
+    for var_name in ["GROQ_API_KEY", "POLLINATIONS_KEY", "INSTAGRAM_USERNAME", "INSTAGRAM_PASSWORD", "FEED_URL"]:
+        val = os.environ.get(var_name)
+        if val:
+            logger.info(f"  ✅ {var_name}: موجوده (طول={len(val)}, شروع با: {val[:5]}...)")
+        else:
+            logger.info(f"  ❌ {var_name}: موجود نیست")
+    
+    # هر متغیری که اسمش شبیه POLLINATIONS هست رو نشون بده (برای پیداکردن typo احتمالی)
+    similar_vars = [k for k in os.environ.keys() if "POLL" in k.upper()]
+    logger.info(f"🔍 متغیرهای شبیه POLLINATIONS در محیط: {similar_vars}")
+    logger.info("=" * 60)
+    
     if not GROQ_API_KEY:
         logger.error("❌ GROQ_API_KEY تنظیم نشده!")
         return
