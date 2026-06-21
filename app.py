@@ -212,7 +212,8 @@ def translate_and_summarize_with_groq(title, content):
             "messages": [
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 300,
+            "max_completion_tokens": 800,  # فضای کافی برای reasoning + جواب نهایی
+            "reasoning_effort": "low",     # کم‌کردن فکرکردن داخلی تا توکن برای جواب بمونه
             "temperature": 0.7
         }
         
@@ -225,7 +226,31 @@ def translate_and_summarize_with_groq(title, content):
         
         if response.status_code == 200:
             result = response.json()
-            summary = result["choices"][0]["message"]["content"]
+            summary = (result["choices"][0]["message"]["content"] or "").strip()
+            
+            if not summary:
+                logger.warning("⚠️ Groq جواب خالی برگردوند - تلاش دوباره با تنظیمات متفاوت...")
+                # تلاش دوم: بدون reasoning_effort و با توکن بیشتر
+                retry_payload = {
+                    "model": "openai/gpt-oss-120b",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_completion_tokens": 1200,
+                    "temperature": 0.7
+                }
+                retry_response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    json=retry_payload,
+                    headers=headers,
+                    timeout=30
+                )
+                if retry_response.status_code == 200:
+                    retry_result = retry_response.json()
+                    summary = (retry_result["choices"][0]["message"]["content"] or "").strip()
+            
+            if not summary:
+                logger.error("❌ بعد از تلاش دوباره هم خلاصه خالی بود")
+                return None
+            
             logger.info(f"✅ خلاصه آماده:\n{summary}\n")
             return summary
         else:
@@ -422,11 +447,17 @@ def main():
         if success:
             success_count += 1
         
-        # فاصله بین پست‌ها - بجز آخرین مورد
         if i < len(articles):
-            wait_seconds = DELAY_BETWEEN_POSTS_MIN * 60
-            logger.info(f"⏳ صبر {DELAY_BETWEEN_POSTS_MIN} دقیقه تا پست بعدی...")
-            time.sleep(wait_seconds)
+            if success:
+                # فقط بعد از پست موفق صبر کن (برای طبیعی به‌نظررسیدن در اینستاگرام)
+                wait_seconds = DELAY_BETWEEN_POSTS_MIN * 60
+                logger.info(f"⏳ صبر {DELAY_BETWEEN_POSTS_MIN} دقیقه تا پست بعدی...")
+                time.sleep(wait_seconds)
+            else:
+                # اگه این مقاله fail شد (نه به‌خاطر اینستاگرام بلکه خلاصه/عکس)
+                # نیازی به صبر طولانی نیست - فقط یه مکث کوتاه و برو سراغ بعدی
+                logger.info("⏳ این مقاله fail شد - بدون صبر طولانی میریم سراغ بعدی...")
+                time.sleep(5)
     
     logger.info("\n" + "=" * 60)
     logger.info(f"✅ پایان اجرا: {success_count}/{len(articles)} پست موفق")
