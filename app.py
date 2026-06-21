@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # ==================== تنظیمات ====================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+POLLINATIONS_KEY = os.getenv("POLLINATIONS_KEY")  # رایگان از https://enter.pollinations.ai
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
 FEED_URL = os.getenv("FEED_URL", "https://tarjomaan.com/feed")
@@ -268,10 +269,14 @@ def translate_and_summarize_with_groq(title, content):
 def generate_image_with_flux(title):
     """
     ساخت عکس با Flux از طریق Pollinations.ai
-    کاملاً رایگان - بدون نیاز به API key یا حساب کاربری
+    رایگان - فقط نیاز به یه API key رایگان از enter.pollinations.ai
     مستقیم بایت‌های عکس رو برمی‌گردونه (نه لینک)
     """
     try:
+        if not POLLINATIONS_KEY:
+            logger.error("❌ POLLINATIONS_KEY تنظیم نشده! از https://enter.pollinations.ai بگیر")
+            return None
+        
         logger.info("🎨 ساخت تصویر با Flux (Pollinations.ai - رایگان)...")
         
         prompt = f"""Modern illustration, Instagram post style, professional design, {title}, Persian Iranian aesthetics, clean, artistic, vibrant colors, modern layout"""
@@ -284,7 +289,8 @@ def generate_image_with_flux(title):
             "width": 1024,
             "height": 1024,
             "nologo": "true",
-            "seed": int(time.time())  # برای تنوع بین درخواست‌ها
+            "seed": int(time.time()),  # برای تنوع بین درخواست‌ها
+            "key": POLLINATIONS_KEY
         }
         
         logger.info("⏳ ارسال درخواست به Pollinations.ai...")
@@ -432,6 +438,10 @@ def main():
     
     if not GROQ_API_KEY:
         logger.error("❌ GROQ_API_KEY تنظیم نشده!")
+        return
+    
+    if not POLLINATIONS_KEY:
+        logger.error("❌ POLLINATIONS_KEY تنظیم نشده! از https://enter.pollinations.ai بگیر")
         return
     
     articles = get_articles_to_post()
