@@ -242,11 +242,11 @@ def translate_and_summarize_with_groq(title, content):
 
 
 def generate_image_with_flux(title):
-    """ساخت عکس با Flux"""
+    """ساخت عکس با Flux Schnell (مدل رسمی - بدون نیاز به version hash)"""
     try:
         logger.info("🎨 ساخت تصویر با Flux...")
         
-        prompt = f"""Modern illustration, 1080x1080px, Instagram post style, professional design:
+        prompt = f"""Modern illustration, Instagram post style, professional design:
 Title: {title}
 Persian/Iranian aesthetics, clean, artistic, vibrant colors, modern layout.
 Text: Not needed - just visual design."""
@@ -256,26 +256,30 @@ Text: Not needed - just visual design."""
             "Content-Type": "application/json"
         }
         
+        # استفاده از endpoint مدل رسمی - دیگه نیازی به version hash نیست
+        # (این endpoint همیشه آخرین نسخه مدل رو صدا می‌زنه)
         payload = {
-            "version": "3f20e3d61ba7502ccbc75a45611e23e1412bde0d88e2e10fce371a493e11d148",
             "input": {
                 "prompt": prompt,
                 "aspect_ratio": "1:1",
-                "num_inference_steps": 25,
-                "guidance": 3.5
+                "num_outputs": 1,
+                "num_inference_steps": 4,  # حداکثر برای schnell (سریع)
+                "output_format": "jpg",
+                "output_quality": 90
             }
         }
         
         logger.info("⏳ ارسال درخواست به Flux...")
         response = requests.post(
-            "https://api.replicate.com/v1/predictions",
+            "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
             json=payload,
             headers=headers,
             timeout=30
         )
         
-        if response.status_code != 201:
+        if response.status_code not in (200, 201):
             logger.error(f"❌ خطای Flux: {response.status_code}")
+            logger.error(f"پاسخ: {response.text[:300]}")
             return None
         
         prediction = response.json()
@@ -297,7 +301,8 @@ Text: Not needed - just visual design."""
             status = prediction.get("status", "unknown")
             
             if status == "succeeded":
-                image_url = prediction["output"][0]
+                output = prediction.get("output")
+                image_url = output[0] if isinstance(output, list) else output
                 logger.info(f"✅ تصویر آماده!\n🔗 {image_url}")
                 return image_url
             
