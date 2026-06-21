@@ -30,7 +30,7 @@ SITE_BASE_URL = os.getenv("SITE_BASE_URL", "https://tarjomaan.com")
 DAILY_POST_COUNT = int(os.getenv("DAILY_POST_COUNT", "5"))
 
 # فاصله بین پست‌ها (دقیقه) - برای طبیعی به نظر رسیدن
-DELAY_BETWEEN_POSTS_MIN = int(os.getenv("DELAY_BETWEEN_POSTS_MIN", "30"))
+DELAY_BETWEEN_POSTS_MIN = int(os.getenv("DELAY_BETWEEN_POSTS_MIN", "47"))
 
 # مسیر ذخیره تاریخچه پست‌ها (باید روی Volume دائمی باشه)
 DATA_DIR = os.getenv("DATA_DIR", "/data")
