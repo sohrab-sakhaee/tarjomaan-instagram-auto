@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 # ==================== تنظیمات ====================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-REPLICATE_TOKEN = os.getenv("REPLICATE_TOKEN")
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
 FEED_URL = os.getenv("FEED_URL", "https://tarjomaan.com/feed")
@@ -30,7 +29,7 @@ SITE_BASE_URL = os.getenv("SITE_BASE_URL", "https://tarjomaan.com")
 DAILY_POST_COUNT = int(os.getenv("DAILY_POST_COUNT", "5"))
 
 # فاصله بین پست‌ها (دقیقه) - برای طبیعی به نظر رسیدن
-DELAY_BETWEEN_POSTS_MIN = int(os.getenv("DELAY_BETWEEN_POSTS_MIN", "47"))
+DELAY_BETWEEN_POSTS_MIN = int(os.getenv("DELAY_BETWEEN_POSTS_MIN", "30"))
 
 # مسیر ذخیره تاریخچه پست‌ها (باید روی Volume دائمی باشه)
 DATA_DIR = os.getenv("DATA_DIR", "/data")
@@ -242,107 +241,67 @@ def translate_and_summarize_with_groq(title, content):
 
 
 def generate_image_with_flux(title):
-    """ساخت عکس با Flux Schnell (مدل رسمی - بدون نیاز به version hash)"""
+    """
+    ساخت عکس با Flux از طریق Pollinations.ai
+    کاملاً رایگان - بدون نیاز به API key یا حساب کاربری
+    مستقیم بایت‌های عکس رو برمی‌گردونه (نه لینک)
+    """
     try:
-        logger.info("🎨 ساخت تصویر با Flux...")
+        logger.info("🎨 ساخت تصویر با Flux (Pollinations.ai - رایگان)...")
         
-        prompt = f"""Modern illustration, Instagram post style, professional design:
-Title: {title}
-Persian/Iranian aesthetics, clean, artistic, vibrant colors, modern layout.
-Text: Not needed - just visual design."""
-
-        headers = {
-            "Authorization": f"Token {REPLICATE_TOKEN}",
-            "Content-Type": "application/json"
+        prompt = f"""Modern illustration, Instagram post style, professional design, {title}, Persian Iranian aesthetics, clean, artistic, vibrant colors, modern layout"""
+        
+        encoded_prompt = requests.utils.quote(prompt)
+        url = f"https://gen.pollinations.ai/image/{encoded_prompt}"
+        
+        params = {
+            "model": "flux",
+            "width": 1024,
+            "height": 1024,
+            "nologo": "true",
+            "seed": int(time.time())  # برای تنوع بین درخواست‌ها
         }
         
-        # استفاده از endpoint مدل رسمی - دیگه نیازی به version hash نیست
-        # (این endpoint همیشه آخرین نسخه مدل رو صدا می‌زنه)
-        payload = {
-            "input": {
-                "prompt": prompt,
-                "aspect_ratio": "1:1",
-                "num_outputs": 1,
-                "num_inference_steps": 4,  # حداکثر برای schnell (سریع)
-                "output_format": "jpg",
-                "output_quality": 90
-            }
-        }
+        logger.info("⏳ ارسال درخواست به Pollinations.ai...")
+        response = requests.get(url, params=params, timeout=90)
         
-        logger.info("⏳ ارسال درخواست به Flux...")
-        response = requests.post(
-            "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
-        
-        if response.status_code not in (200, 201):
-            logger.error(f"❌ خطای Flux: {response.status_code}")
+        if response.status_code != 200:
+            logger.error(f"❌ خطای Pollinations: {response.status_code}")
             logger.error(f"پاسخ: {response.text[:300]}")
             return None
         
-        prediction = response.json()
-        prediction_id = prediction["id"]
-        logger.info(f"⏳ ID: {prediction_id} - صبر برای نتیجه...")
+        # ذخیره مستقیم به فایل محلی
+        os.makedirs("/tmp", exist_ok=True)
+        image_path = f"/tmp/post_image_{int(time.time())}.jpg"
+        with open(image_path, "wb") as f:
+            f.write(response.content)
         
-        # پولینگ
-        max_attempts = 240  # 20 دقیقه
-        for attempt in range(max_attempts):
-            time.sleep(5)
-            
-            response = requests.get(
-                f"https://api.replicate.com/v1/predictions/{prediction_id}",
-                headers=headers,
-                timeout=10
-            )
-            
-            prediction = response.json()
-            status = prediction.get("status", "unknown")
-            
-            if status == "succeeded":
-                output = prediction.get("output")
-                image_url = output[0] if isinstance(output, list) else output
-                logger.info(f"✅ تصویر آماده!\n🔗 {image_url}")
-                return image_url
-            
-            elif status == "failed":
-                logger.error(f"❌ خطا: {prediction.get('error', 'Unknown')}")
-                return None
-            
-            if attempt % 12 == 0:  # هر دقیقه یک بار
-                logger.info(f"  ⏳ تلاش {attempt//12+1}... (Status: {status})")
+        # یه بررسی کوچیک که واقعاً عکس دریافت شده (نه پیام خطای متنی)
+        if os.path.getsize(image_path) < 1000:
+            logger.error("❌ فایل دریافتی خیلی کوچیکه - احتمالاً عکس نیست")
+            return None
         
-        logger.error("❌ timeout - خیلی طول کشید")
-        return None
+        logger.info(f"✅ تصویر آماده! ذخیره شد در: {image_path}")
+        return image_path
         
     except Exception as e:
-        logger.error(f"❌ خطا در Flux: {e}")
+        logger.error(f"❌ خطا در Pollinations: {e}")
         return None
 
 
-def post_to_instagram(image_url, caption):
-    """پست در اینستاگرام"""
+def post_to_instagram(image_path, caption):
+    """پست در اینستاگرام - image_path یه فایل محلیه (نه URL)"""
     try:
         logger.info("📸 تلاش برای پست در اینستاگرام...")
         
-        # سعی کن با Instagrapi
         try:
             from instagrapi import Client
             
             client = Client()
             client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             
-            # دانلود عکس
-            logger.info("⏳ دانلود عکس...")
-            img_response = requests.get(image_url, timeout=15)
-            img_path = "/tmp/instagram_post.jpg"
-            with open(img_path, 'wb') as f:
-                f.write(img_response.content)
-            
-            # پست
             logger.info("📱 پست در اینستاگرام...")
-            media = client.photo_upload(img_path, caption=caption)
+            media = client.photo_upload(image_path, caption=caption)
             
             logger.info(f"✅ پست شد! ID: {media.id}")
             return True
@@ -409,22 +368,29 @@ def process_single_article(article, index, total):
         return False
     
     # ساخت تصویر
-    image_url = generate_image_with_flux(article['title'])
-    if not image_url:
+    image_path = generate_image_with_flux(article['title'])
+    if not image_path:
         logger.error(f"❌ ساخت تصویر ناموفق برای: {article['title']}")
         return False
     
-    logger.info(f"\n📸 عکس:\n{image_url}")
+    logger.info(f"\n📸 عکس ذخیره شد در: {image_path}")
     logger.info(f"\n📝 متن پست:\n{summary}\n")
     
-    save_result(article['title'], summary, image_url)
+    save_result(article['title'], summary, image_path)
     
     # پست در اینستاگرام
     posted = False
     if INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD:
-        posted = post_to_instagram(image_url, summary)
+        posted = post_to_instagram(image_path, summary)
     else:
         logger.warning("⚠️ اطلاعات اینستاگرام تنظیم نشده")
+    
+    # پاک‌کردن فایل موقت عکس (دیگه لازم نیست)
+    try:
+        if os.path.exists(image_path):
+            os.remove(image_path)
+    except Exception:
+        pass
     
     # این مقاله رو به‌عنوان "پست‌شده" ثبت کن - حتی اگر پست در اینستاگرام
     # ناموفق بود ولی خلاصه/عکس ساخته شد (برای جلوگیری از تکرار بی‌نهایت)
@@ -439,8 +405,8 @@ def main():
     logger.info(f"🎯 هدف: {DAILY_POST_COUNT} پست در این اجرا")
     logger.info("=" * 60)
     
-    if not GROQ_API_KEY or not REPLICATE_TOKEN:
-        logger.error("❌ API Keys تنظیم نشده‌اند!")
+    if not GROQ_API_KEY:
+        logger.error("❌ GROQ_API_KEY تنظیم نشده!")
         return
     
     articles = get_articles_to_post()
