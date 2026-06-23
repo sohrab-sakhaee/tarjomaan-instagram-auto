@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 # ==================== تنظیمات ====================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-POLLINATIONS_KEY = os.getenv("POLLINATIONS_KEY")  # رایگان از https://enter.pollinations.ai
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
 FEED_URL = os.getenv("FEED_URL", "https://tarjomaan.com/feed")
@@ -268,55 +267,93 @@ def translate_and_summarize_with_groq(title, content):
 
 def generate_image_with_flux(title):
     """
-    ساخت عکس با Flux از طریق Pollinations.ai
-    رایگان - فقط نیاز به یه API key رایگان از enter.pollinations.ai
-    مستقیم بایت‌های عکس رو برمی‌گردونه (نه لینک)
+    ساخت کارت گرافیکی با Pillow (بدون هیچ API خارجی)
+    ✅ ۱۰۰٪ رایگان، بدون اکانت، بدون محدودیت، برای همیشه
     """
     try:
-        if not POLLINATIONS_KEY:
-            logger.error("❌ POLLINATIONS_KEY تنظیم نشده! از https://enter.pollinations.ai بگیر")
-            return None
-        
-        logger.info("🎨 ساخت تصویر با Flux (Pollinations.ai - رایگان)...")
-        
-        prompt = f"""Modern illustration, Instagram post style, professional design, {title}, Persian Iranian aesthetics, clean, artistic, vibrant colors, modern layout"""
-        
-        encoded_prompt = requests.utils.quote(prompt)
-        url = f"https://gen.pollinations.ai/image/{encoded_prompt}"
-        
-        params = {
-            "model": "flux",
-            "width": 1024,
-            "height": 1024,
-            "nologo": "true",
-            "seed": int(time.time()),  # برای تنوع بین درخواست‌ها
-            "key": POLLINATIONS_KEY
-        }
-        
-        logger.info("⏳ ارسال درخواست به Pollinations.ai...")
-        response = requests.get(url, params=params, timeout=90)
-        
-        if response.status_code != 200:
-            logger.error(f"❌ خطای Pollinations: {response.status_code}")
-            logger.error(f"پاسخ: {response.text[:300]}")
-            return None
-        
-        # ذخیره مستقیم به فایل محلی
+        logger.info("🎨 ساخت تصویر با Pillow (محلی - کاملاً رایگان)...")
+        from PIL import Image, ImageDraw
+        import hashlib
+
+        W, H = 1080, 1080
+
+        # ۵ تم رنگی متنوع
+        palettes = [
+            {'bg': [(30,30,60),(60,30,90)],   'accent': (150,100,255), 'text': (240,240,255)},
+            {'bg': [(15,40,30),(20,70,50)],   'accent': (80,200,120),  'text': (220,255,230)},
+            {'bg': [(50,20,20),(90,30,30)],   'accent': (255,100,80),  'text': (255,230,220)},
+            {'bg': [(20,30,60),(20,60,90)],   'accent': (60,160,255),  'text': (220,235,255)},
+            {'bg': [(40,30,10),(70,50,10)],   'accent': (255,180,40),  'text': (255,245,220)},
+        ]
+
+        # انتخاب تم بر اساس عنوان (هر مقاله تم ثابت داره)
+        idx = int(hashlib.md5(title.encode()).hexdigest(), 16) % len(palettes)
+        pal = palettes[idx]
+
+        # ساخت گرادیان پس‌زمینه
+        img = Image.new('RGB', (W, H))
+        draw = ImageDraw.Draw(img)
+        for y in range(H):
+            t = y / H
+            r = int(pal['bg'][0][0]*(1-t) + pal['bg'][1][0]*t)
+            g = int(pal['bg'][0][1]*(1-t) + pal['bg'][1][1]*t)
+            b = int(pal['bg'][0][2]*(1-t) + pal['bg'][1][2]*t)
+            draw.line([(0,y),(W,y)], fill=(r,g,b))
+
+        # دایره‌های تزئینی (overlay شفاف)
+        overlay = Image.new('RGBA', (W,H), (0,0,0,0))
+        d2 = ImageDraw.Draw(overlay)
+        ac = pal['accent']
+        d2.ellipse([W-320,-120, W+80,280],   fill=(ac[0],ac[1],ac[2],45))
+        d2.ellipse([-80,H-280, 280,H+80],    fill=(ac[0],ac[1],ac[2],30))
+        d2.ellipse([W//2-200,H//2-200, W//2+200,H//2+200], fill=(ac[0],ac[1],ac[2],12))
+        img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+        draw = ImageDraw.Draw(img)
+
+        # خط عمودی تزئینی سمت چپ
+        draw.rectangle([55, 55, 63, H-55], fill=pal['accent'])
+
+        # نوار نام سایت بالا
+        draw.rectangle([80, 78, 360, 118], fill=pal['accent'])
+        draw.text((90, 83), 'tarjomaan.com', fill=(10,10,10))
+
+        # شکستن عنوان به خطوط
+        words = title.split()
+        lines, cur = [], []
+        for w in words:
+            test = ' '.join(cur + [w])
+            if len(test) > 20 and cur:
+                lines.append(' '.join(cur))
+                cur = [w]
+            else:
+                cur.append(w)
+        if cur:
+            lines.append(' '.join(cur))
+
+        # رسم عنوان وسط
+        line_h = 80
+        total_h = len(lines) * line_h
+        y0 = (H - total_h) // 2 - 20
+        for i, ln in enumerate(lines[:7]):
+            draw.text((80, y0 + i*line_h), ln, fill=pal['text'])
+
+        # خط و متن پایین
+        draw.rectangle([80, H-110, W-80, H-103], fill=pal['accent'])
+        draw.text((80, H-88), 'ترجمان  |  روایت دانش', fill=pal['accent'])
+
+        # ذخیره
         os.makedirs("/tmp", exist_ok=True)
         image_path = f"/tmp/post_image_{int(time.time())}.jpg"
-        with open(image_path, "wb") as f:
-            f.write(response.content)
-        
-        # یه بررسی کوچیک که واقعاً عکس دریافت شده (نه پیام خطای متنی)
-        if os.path.getsize(image_path) < 1000:
-            logger.error("❌ فایل دریافتی خیلی کوچیکه - احتمالاً عکس نیست")
-            return None
-        
-        logger.info(f"✅ تصویر آماده! ذخیره شد در: {image_path}")
+        img.save(image_path, 'JPEG', quality=93)
+
+        size_kb = os.path.getsize(image_path) // 1024
+        logger.info(f"✅ تصویر ساخته شد: {image_path} ({size_kb} KB)")
         return image_path
-        
+
     except Exception as e:
-        logger.error(f"❌ خطا در Pollinations: {e}")
+        logger.error(f"❌ خطا در ساخت تصویر: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
 
 
@@ -438,24 +475,19 @@ def main():
     
     # دیباگ: ببینیم دقیقاً چه متغیرهایی به کانتینر رسیدن (بدون نشون‌دادن مقدار واقعی)
     logger.info("🔍 بررسی متغیرهای محیطی:")
-    for var_name in ["GROQ_API_KEY", "POLLINATIONS_KEY", "INSTAGRAM_USERNAME", "INSTAGRAM_PASSWORD", "FEED_URL"]:
+    for var_name in ["GROQ_API_KEY", "INSTAGRAM_USERNAME", "INSTAGRAM_PASSWORD", "FEED_URL"]:
         val = os.environ.get(var_name)
         if val:
             logger.info(f"  ✅ {var_name}: موجوده (طول={len(val)}, شروع با: {val[:5]}...)")
         else:
             logger.info(f"  ❌ {var_name}: موجود نیست")
     
-    # هر متغیری که اسمش شبیه POLLINATIONS هست رو نشون بده (برای پیداکردن typo احتمالی)
-    similar_vars = [k for k in os.environ.keys() if "POLL" in k.upper()]
-    logger.info(f"🔍 متغیرهای شبیه POLLINATIONS در محیط: {similar_vars}")
     logger.info("=" * 60)
     
     if not GROQ_API_KEY:
         logger.error("❌ GROQ_API_KEY تنظیم نشده!")
         return
     
-    if not POLLINATIONS_KEY:
-        logger.error("❌ POLLINATIONS_KEY تنظیم نشده! از https://enter.pollinations.ai بگیر")
         return
     
     articles = get_articles_to_post()
